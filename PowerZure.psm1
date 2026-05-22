@@ -32,7 +32,14 @@ function Get-AzureToken
     If($AAD){$token = Get-AzAccessToken -ResourceTypeName AadGraph}
     If($REST){$token = Get-AzAccessToken}
     If($Graph){$token = Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com/"}
-    $Headers.Add("Authorization","Bearer $($token.token)")    
+
+    $accessToken = $token.Token
+
+    If($accessToken -is [System.Security.SecureString]){
+        $accessToken = ConvertFrom-SecureString $accessToken -AsPlainText
+    }
+
+    $Headers.Add("Authorization","Bearer $accessToken")    
     $Headers
 }
 
