@@ -901,49 +901,72 @@ function Export-AzureKeyVaultContent
 	[Parameter(Mandatory=$True,HelpMessage='Key or Certificate?')][String]$Type = $null)	
 
 	$user = Get-AzContext
-	Set-AzKeyVaultAccessPolicy -VaultName $vaultname -UserPrincipalName $user.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore		
+	$wasRbac = $false
+	If((Get-AzKeyVault -VaultName $VaultName).EnableRbacAuthorization)
+	{
+		$wasRbac = $true
+		$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $VaultName).ResourceId
+		$vaultResource.Properties.enableRbacAuthorization = $false
+		Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
+	}
+	try
+	{
+		Set-AzKeyVaultAccessPolicy -VaultName $vaultname -UserPrincipalName $user.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore		
 	
-	If($Type -eq 'Key')
-	{
-		$Path = $OutFilePath + '\key.pem'
-		$Export = Get-AzKeyVaultKey -VaultName $VaultName -KeyName $Name -OutFile $Path
-		If($Export)
+		If($Type -eq 'Key')
 		{
-			Write-Host "Successfully exported key to $path" -Foregroundcolor Green
+			$Path = $OutFilePath + 'key.pem'
+			$Export = Get-AzKeyVaultKey -VaultName $VaultName -KeyName $Name -OutFile $Path
+			If($Export)
+			{
+				Write-Host "Successfully exported key to $path" -Foregroundcolor Green
+			}
+			else
+			{
+				Write-Host "Failed to export Key" -Foregroundcolor Red
+			}
 		}
-		else
+		If($Type -eq 'Certificate')
 		{
-			Write-Host "Failed to export Key" -Foregroundcolor Red
+			$Path = $OutFilePath + 'Cert.pfx'
+			$cert = Get-AzKeyVaultCertificate -VaultName $Vaultname -Name $Name
+			$secret = Get-AzKeyVaultSecret -VaultName $vaultName -Name $cert.Name
+			$secretByte = [Convert]::FromBase64String($secret.SecretValueText)
+			$x509Cert = new-object System.Security.Cryptography.X509Certificates.X509Certificate2
+			$x509Cert.Import($secretByte, "", "Exportable,PersistKeySet")
+			$type = [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx
+			$pfxFileByte = $x509Cert.Export($type, $password)
+			[System.IO.File]::WriteAllBytes("$Path", $pfxFileByte)
+			$test = ls C:\temp\cert.pfx
+			If($test)
+			{
+				Write-Host "Successfully exported Certificate to $path" -Foregroundcolor Green
+			}
+			else
+			{
+				Write-Host "Failed to export Certificate"
+			}
+		}
+		elseif($Type -ne 'Certificate' -and $Type -ne 'Key')
+		{
+			Write-Error "-Type must be a Certificate or Key!" -Category InvalidArgument
+			Write-Error "Usage: Export-KeyVaultContent -VaultName VaultTest -Type Key -Name Testkey1234 -OutFilePath C:\Temp" -Category InvalidArgument
 		}
 	}
-	If($Type -eq 'Certificate')
+	finally
 	{
-		$Path = $OutFilePath + '\Cert.pfx'
-		$cert = Get-AzKeyVaultCertificate -VaultName $Vaultname -Name $Name
-		$secret = Get-AzKeyVaultSecret -VaultName $vaultName -Name $cert.Name
-		$secretByte = [Convert]::FromBase64String($secret.SecretValueText)
-		$x509Cert = new-object System.Security.Cryptography.X509Certificates.X509Certificate2
-		$x509Cert.Import($secretByte, "", "Exportable,PersistKeySet")
-		$type = [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx
-		$pfxFileByte = $x509Cert.Export($type, $password)
-		[System.IO.File]::WriteAllBytes("$Path", $pfxFileByte)
-		$test = ls C:\temp\cert.pfx
-		If($test)
+		Remove-AzKeyVaultAccessPolicy -VaultName $VaultName -UserPrincipalName $user.Account -ErrorAction SilentlyContinue
+		If($wasRbac)
 		{
-			Write-Host "Successfully exported Certificate to $path" -Foregroundcolor Green
-		}
-		else
-		{
-			Write-Host "Failed to export Certificate"
+			$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $VaultName).ResourceId
+			$vaultResource.Properties.enableRbacAuthorization = $true
+			Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
 		}
 	}
-	elseif($Type -ne 'Certificate' -and $Type -ne 'Key')
-	{
-		Write-Error "-Type must be a Certificate or Key!" -Category InvalidArgument
-		Write-Error "Usage: Export-KeyVaultContent -VaultName VaultTest -Type Key -Name Testkey1234 -OutFilePath C:\Temp" -Category InvalidArgument
-	}
+	Write-Host "Removing temporary access policy from $VaultName..."
+	If($wasRbac) { Write-Host "Rolling back $VaultName to RBAC..." }
 }
-    
+
 function Show-AzureStorageContent
 {
 <#
