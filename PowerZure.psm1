@@ -768,7 +768,7 @@ function Get-AzureKeyVaultContent
 {
 <# 
 .SYNOPSIS
-    Get the secrets and certificates from a specific Key Vault or all of them
+    Get the secrets from a specific Key Vault or all of them
 
 .PARAMETER 
     -VaultName (Key Vault Name)
@@ -789,45 +789,94 @@ function Get-AzureKeyVaultContent
 		
 		ForEach($vault in $vaults)
 		{
-
 			$vaultsname = $vault.VaultName
-			Set-AzKeyVaultAccessPolicy -VaultName $vaultsname -UserPrincipalName $name.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore
-			$Secrets = Get-AzKeyVaultSecret -VaultName $vaultsname
-			ForEach($Secret in $Secrets)
+			$wasRbac = $false
+			If((Get-AzKeyVault -VaultName $vaultsname).EnableRbacAuthorization)
 			{
-				$Value = Get-AzKeyVaultSecret -VaultName $vaultsname -name $Secret.name
+				$wasRbac = $true
+				$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $vaultsname).ResourceId
+				$vaultResource.Properties.enableRbacAuthorization = $false
+				Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
+			}
+			try
+			{
+				Set-AzKeyVaultAccessPolicy -VaultName $vaultsname -UserPrincipalName $name.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore
+				$Secrets = Get-AzKeyVaultSecret -VaultName $vaultsname
+				ForEach($Secret in $Secrets)
+				{
+                    $SecretObject = Get-AzKeyVaultSecret -VaultName $vaultsname -Name $Secret.Name
+                    $SecretValue  = Get-AzKeyVaultSecret -VaultName $vaultsname -Name $Secret.Name -AsPlainText
 
-				$obj = New-Object -TypeName psobject	
-				$obj | Add-Member -MemberType NoteProperty -Name SecretName -Value $Secret.Name
-				$obj | Add-Member -MemberType NoteProperty -Name SecretValue -Value $Value.SecretValueText
-				$obj | Add-Member -MemberType NoteProperty -Name ContentType -Value $Value.ContentType
-				$obj
+                    $obj = New-Object -TypeName psobject
+                    $obj | Add-Member -MemberType NoteProperty -Name SecretName  -Value $Secret.Name
+                    $obj | Add-Member -MemberType NoteProperty -Name SecretValue -Value $SecretValue
+                    $obj | Add-Member -MemberType NoteProperty -Name ContentType -Value $SecretObject.ContentType
+                    $obj
+				}
+			}
+			finally
+			{
+                Write-Host "Removing temporary access policy from $vaultsname..."
+                Remove-AzKeyVaultAccessPolicy -VaultName $vaultsname -UserPrincipalName $name.Account -ErrorAction SilentlyContinue
+				If($wasRbac)
+				{
+					Write-Host "Rolling back $vaultsname to RBAC..."
+					$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $vaultsname).ResourceId
+					$vaultResource.Properties.enableRbacAuthorization = $true
+					Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
+				}
 			}
 		}
 	}
-	If($VaultName)
-	{			
-		Set-AzKeyVaultAccessPolicy -VaultName $vaultname -UserPrincipalName $name.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore
-		$Secrets = Get-AzKeyVaultSecret -VaultName $vaultname
-
-		ForEach($Secret in $Secrets)
+    elseif ($VaultName)
+    {
+		$wasRbac = $false
+		If((Get-AzKeyVault -VaultName $VaultName).EnableRbacAuthorization)
 		{
-			$Value = Get-AzKeyVaultSecret -VaultName $vaultname -name $Secret.name
-
-			$obj = New-Object -TypeName psobject	
-			$obj | Add-Member -MemberType NoteProperty -Name SecretName -Value $Secret.Name
-			$obj | Add-Member -MemberType NoteProperty -Name SecretValue -Value $Value.SecretValueText
-			$obj | Add-Member -MemberType NoteProperty -Name ContentType -Value $Value.ContentType
-			$obj
+			$wasRbac = $true
+			$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $VaultName).ResourceId
+			$vaultResource.Properties.enableRbacAuthorization = $false
+			Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
 		}
-	}
+		try
+		{
+			Set-AzKeyVaultAccessPolicy -VaultName $VaultName -UserPrincipalName $name.Account -PermissionsToCertificates get,list -PermissionsToSecrets get,list -PermissionsToKeys get,list
+			$Secrets = Get-AzKeyVaultSecret -VaultName $VaultName
+
+			foreach ($Secret in $Secrets) 
+			{
+				$SecretObject = Get-AzKeyVaultSecret -VaultName $VaultName -Name $Secret.Name
+				$SecretValue = Get-AzKeyVaultSecret -VaultName $VaultName -Name $Secret.Name -AsPlainText
+
+				$obj = New-Object -TypeName psobject
+				$obj | Add-Member -MemberType NoteProperty -Name VaultName   -Value $VaultName
+				$obj | Add-Member -MemberType NoteProperty -Name SecretName  -Value $Secret.Name
+				$obj | Add-Member -MemberType NoteProperty -Name SecretValue -Value $SecretValue
+				$obj | Add-Member -MemberType NoteProperty -Name ContentType -Value $SecretObject.ContentType
+				$obj
+			}
+		}
+		finally
+		{
+			Write-Host "Removing temporary access policy from $VaultName..."
+			Remove-AzKeyVaultAccessPolicy -VaultName $VaultName -UserPrincipalName $name.Account -ErrorAction SilentlyContinue
+			If($wasRbac)
+			{
+				Write-Host "Rolling back $VaultName to RBAC..."
+				$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $VaultName).ResourceId
+				$vaultResource.Properties.enableRbacAuthorization = $true
+				Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
+			}
+		}
+    }
 	If(!$VaultName -and !$All)
-	{
-	Write-Error "Usage: Get-KeyVaultContents -Name VaultName" -Category InvalidArgument
-	Write-Error "Usage: Get-KeyVaultContents -All" -Category InvalidArgument
-	}
-	
-}
+        {
+        Write-Error "Usage: Get-KeyVaultContents -Name VaultName" -Category InvalidArgument
+        Write-Error "Usage: Get-KeyVaultContents -All" -Category InvalidArgument
+        }
+        
+    }
+
 
 function Export-AzureKeyVaultContent
 {
