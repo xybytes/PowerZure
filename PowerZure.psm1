@@ -679,36 +679,81 @@ function Show-AzureKeyVaultContent
 		ForEach($vault in $vaults)
 		{
 			$vaultsname = $vault.VaultName
-			Set-AzKeyVaultAccessPolicy -VaultName $vaultsname -UserPrincipalName $name.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore
-			$Secrets = $Vault | Get-AzKeyVaultSecret
-			$Keys = $Vault | Get-AzKeyVaultKey
-			$Certificates = $Vault | Get-AzKeyVaultCertificate 
+			$wasRbac = $false
+			If((Get-AzKeyVault -VaultName $vaultsname).EnableRbacAuthorization)
+			{
+				$wasRbac = $true
+				$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $vaultsname).ResourceId
+				$vaultResource.Properties.enableRbacAuthorization = $false
+				Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
+			}
+			try
+			{
+				Set-AzKeyVaultAccessPolicy -VaultName $vaultsname -UserPrincipalName $name.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore
+				$Secrets = $Vault | Get-AzKeyVaultSecret
+				$Keys = $Vault | Get-AzKeyVaultKey
+				$Certificates = $Vault | Get-AzKeyVaultCertificate 
+				$obj = New-Object -TypeName psobject	
+	            $obj | Add-Member -MemberType NoteProperty -Name VaultName -Value $vaultsname
+				$obj | Add-Member -MemberType NoteProperty -Name SecretName -Value $Secrets.Name
+				$obj | Add-Member -MemberType NoteProperty -Name SecretContentType -Value $Secrets.ContentType
+				$obj | Add-Member -MemberType NoteProperty -Name CertificateName -Value $Certificates.Name
+				$obj | Add-Member -MemberType NoteProperty -Name KeyName -Value $Keys.Name
+				$obj | Add-Member -MemberType NoteProperty -Name KeyEnabled -Value $Keys.Enabled
+				$obj | Add-Member -MemberType NoteProperty -Name KeyRecoveryLevel -Value $Keys.RecoveryLevel
+	            $obj
+			}
+			finally
+			{
+                Write-Host "Removing temporary access policy from $vaultsname..."
+                Remove-AzKeyVaultAccessPolicy -VaultName $vaultsname -UserPrincipalName $name.Account -ErrorAction SilentlyContinue
+
+				If($wasRbac)
+				{
+					Write-Host "Rolling back $vaultsname to RBAC..."
+					$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $vaultsname).ResourceId
+					$vaultResource.Properties.enableRbacAuthorization = $true
+					Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force | Out-Null
+				}
+			}
+		}
+	}
+	If($VaultName)
+	{
+		$wasRbac = $false
+		If((Get-AzKeyVault -VaultName $vaultname).EnableRbacAuthorization)
+		{
+			$wasRbac = $true
+			$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $vaultname).ResourceId
+			$vaultResource.Properties.enableRbacAuthorization = $false
+			Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force
+		}
+		try
+		{
+			Set-AzKeyVaultAccessPolicy -VaultName $vaultname -UserPrincipalName $name.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore
+			$Secrets = $vaultname | Get-AzKeyVaultSecret
+			$Keys = $vaultname | Get-AzKeyVaultKey
+			$Certificates = $vaultname | Get-AzKeyVaultCertificate 
 			$obj = New-Object -TypeName psobject	
-            $obj | Add-Member -MemberType NoteProperty -Name VaultName -Value $vaultsname
+	        $obj | Add-Member -MemberType NoteProperty -Name VaultName -Value $Vaultname
 			$obj | Add-Member -MemberType NoteProperty -Name SecretName -Value $Secrets.Name
 			$obj | Add-Member -MemberType NoteProperty -Name SecretContentType -Value $Secrets.ContentType
 			$obj | Add-Member -MemberType NoteProperty -Name CertificateName -Value $Certificates.Name
 			$obj | Add-Member -MemberType NoteProperty -Name KeyName -Value $Keys.Name
 			$obj | Add-Member -MemberType NoteProperty -Name KeyEnabled -Value $Keys.Enabled
 			$obj | Add-Member -MemberType NoteProperty -Name KeyRecoveryLevel -Value $Keys.RecoveryLevel
-            $obj
+	        $obj
 		}
-	}
-	If($VaultName)
-	{			
-		Set-AzKeyVaultAccessPolicy -VaultName $vaultname -UserPrincipalName $name.Account -PermissionsToCertificates create,get,list,delete,import,update,recover,backup,restore -PermissionsToSecrets get,list,delete,recover,backup,restore -PermissionsToKeys create,get,list,delete,import,update,recover,backup,restore
-		$Secrets = $vaultname | Get-AzKeyVaultSecret
-		$Keys = $vaultname | Get-AzKeyVaultKey
-		$Certificates = $vaultname | Get-AzKeyVaultCertificate 
-		$obj = New-Object -TypeName psobject	
-        $obj | Add-Member -MemberType NoteProperty -Name VaultName -Value $Vaultname
-		$obj | Add-Member -MemberType NoteProperty -Name SecretName -Value $Secrets.Name
-		$obj | Add-Member -MemberType NoteProperty -Name SecretContentType -Value $Secrets.ContentType
-		$obj | Add-Member -MemberType NoteProperty -Name CertificateName -Value $Certificates.Name
-		$obj | Add-Member -MemberType NoteProperty -Name KeyName -Value $Keys.Name
-		$obj | Add-Member -MemberType NoteProperty -Name KeyEnabled -Value $Keys.Enabled
-		$obj | Add-Member -MemberType NoteProperty -Name KeyRecoveryLevel -Value $Keys.RecoveryLevel
-        $obj		
+		finally
+		{
+			If($wasRbac)
+			{
+				Write-Host "Rolling back $vaultname to RBAC..."
+				$vaultResource = Get-AzResource -ResourceId (Get-AzKeyVault -VaultName $vaultname).ResourceId
+				$vaultResource.Properties.enableRbacAuthorization = $true
+				Set-AzResource -ResourceId $vaultResource.ResourceId -Properties $vaultResource.Properties -Force
+			}
+		}
 	}
 	If(!$VaultName -and !$All)
 	{
